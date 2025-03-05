@@ -22,7 +22,7 @@ parser.add_argument('--api-key', type=str, default="", help='The API key for you
 parser.add_argument('--out', type=str, default='output', help='The folder where output files should be stored (ideally blank)')
 parser.add_argument('--img-type', type=str, default='jpeg', help='Image type for screenshots: jpeg, png, or webp')
 parser.add_argument('--max-screenshots', type=int, default=None, help='The maximum number of screenshots that will be returned for a webpage')
-parser.add_argument('--wait', type=int, default=None, help='The amount of time the browser will wait to take a screenshot after scrolling to each location')
+parser.add_argument('--wait', type=int, default=None, help='The amount of time the browser will wait to take a screenshot after scrolling to each location, in milliseconds')
 parser.add_argument('--dim', type=int, nargs=2, default=None, help='The width and height of the browser when it takes a screenshot')
 
 args = parser.parse_args()
