@@ -1,0 +1,3 @@
+
+class ElementNotLocatedByText(Exception):
+    pass

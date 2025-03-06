@@ -6,6 +6,7 @@ import tempfile
 import os
 from PIL import Image
 import sys
+from exceptions import ElementNotLocatedByText
 
 # Server options
 MEM_LIMIT_MB = 4_000  # 4 GB memory threshold for child scraping process
@@ -19,6 +20,7 @@ DEFAULT_BROWSER_DIM = [1280, 2000]  # If a user doesn't set browser dimensions  
 MAX_BROWSER_DIM = [2400, 4000]  # Maximum width and height a user can set
 MIN_BROWSER_DIM = [100, 100]  # Minimum width and height a user can set
 USER_AGENT = "Mozilla/5.0 (compatible; Abbey/1.0; +https://github.com/US-Artificial-Intelligence/scraper)"
+MAX_TIMEOUT = 120  # max worker timeout in seconds
 
 CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
 CELERY_BROKER_URL = "redis://localhost:6379/0"
@@ -37,7 +39,7 @@ def make_celery():
 celery = make_celery()
 
 @celery.task
-def scrape_task(url, wait, image_format, n_screenshots, browser_dim):
+def scrape_task(url, wait, image_format, n_screenshots, browser_dim, actions):
 
     # Memory limits for the task process
     soft, hard = (MEM_LIMIT_MB * 1024 * 1024, MEM_LIMIT_MB * 1024 * 1024)
@@ -54,6 +56,7 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim):
     }
     status = None
     headers = None
+    main_url = url
     try:
         with sync_playwright() as p:
             # Should be resilient to untrusted websites
@@ -63,18 +66,21 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim):
             page = context.new_page()
 
             # Set various security headers and limits
-            page.set_default_timeout(30000)  # 30 second timeout
-            page.set_default_navigation_timeout(30000)
+            page.set_default_timeout(15000)  # 15 second timeout
+            page.set_default_navigation_timeout(15000)
 
             processing_download = False
 
             REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308]  # Some in the 300s like Multiple Choice not included
             
             # Handle response will work even if goto fails (i.e., for download).
+            responses = {}
             response = None
             def handle_response(_response):
                 nonlocal response
+                nonlocal responses
                 # Check if it's the main resource
+                responses[_response.url] = _response
                 if _response.url == url:
                     response = _response
                 # ...or we just got a 302 and are going to a new URL to scrape
@@ -122,17 +128,38 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim):
             status = response.status
             headers = dict(response.headers) if response else {}
             content_type = headers.get("content-type", "").lower()
+            main_url = response.url
 
             if status >= 400:
                 pass
             elif not processing_download:
+
+                while len(actions):
+                    if len(actions) and actions[0]['action'] == 'click_link':
+                        act = actions[0]
+                        args = act['args']
+                        txt = args['text']
+                        page.wait_for_timeout(wait)
+                        try:
+                            page.get_by_text(txt).first.click()
+                        except:
+                            raise ElementNotLocatedByText(txt)
+                        if response.url != page.url:
+                            if page.url in responses:
+                                response = responses[page.url]
+                    actions = actions[1:]
+
                 status = response.status
                 headers = dict(response.headers)
                 content_type = headers.get("content-type", "").lower()
+                main_url = response.url
 
                 # If this is an HTML page, take screenshots
                 if "text/html" in content_type:
                     page.wait_for_timeout(wait)
+
+                    file_bytes = page.content().encode()
+                    main_url = page.url
 
                     # Get total page height
                     total_height = page.evaluate("() => document.documentElement.scrollHeight")
@@ -164,10 +191,11 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim):
 
                         raw_screenshot_files.append(tmp.name)
                         tmp.close()
+                else:
+                    file_bytes = response.body()
 
-                # If not text/html, just retrieve the raw bytes
+                # Retrieve the raw bytes regardless of content type
                 # Note that if not text/html, might've been caught by the download stuff above
-                file_bytes = response.body()
                 content_file_tmp.write(file_bytes)
                 browser.close()
 
@@ -203,4 +231,4 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim):
         finally:
             os.remove(ss)
 
-    return status, headers, content_file, compressed_screenshot_files, metadata
+    return status, headers, content_file, compressed_screenshot_files, metadata, main_url

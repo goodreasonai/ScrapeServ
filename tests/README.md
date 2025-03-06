@@ -6,6 +6,8 @@ These tests use `pytest`. You can install all requirements from teh `requirement
 python3 -m pip install -r requirements.txt
 ```
 
+You may choose to use a virtual environment.
+
 The tests assume that ScapeServ is running at `http://localhost:5006` without any API key.
 
 ## How tests work

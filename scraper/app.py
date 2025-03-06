@@ -6,9 +6,10 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 import os
-from worker import scrape_task, MAX_BROWSER_DIM, MIN_BROWSER_DIM, DEFAULT_BROWSER_DIM, DEFAULT_WAIT, MAX_SCREENSHOTS, MAX_WAIT, DEFAULT_SCREENSHOTS
+from worker import scrape_task, MAX_BROWSER_DIM, MIN_BROWSER_DIM, DEFAULT_BROWSER_DIM, DEFAULT_WAIT, MAX_SCREENSHOTS, MAX_WAIT, DEFAULT_SCREENSHOTS, MAX_TIMEOUT
 import json
 import mimetypes
+from exceptions import ElementNotLocatedByText
 
 
 app = Flask(__name__)
@@ -118,6 +119,8 @@ def scrape():
     wait = request.json.get('wait', DEFAULT_WAIT)
     n_screenshots = request.json.get('max_screenshots', DEFAULT_SCREENSHOTS)
     browser_dim = request.json.get('browser_dim', DEFAULT_BROWSER_DIM)
+    actions = request.json.get('actions', None)
+    worker_timeout = request.json.get('worker_timeout', 60)  # in seconds
 
     if wait < 0 or wait > MAX_WAIT:
         return jsonify({
@@ -134,6 +137,11 @@ def scrape():
         return jsonify({
                 'error': f'Value {n_screenshots} for max_screenshots is unacceptable; must be below {MAX_SCREENSHOTS}'
             }), 400
+    
+    if worker_timeout < 0 or worker_timeout > MAX_TIMEOUT:
+        return jsonify({
+            'error': f'Value {worker_timeout} for "worker_timeout" is unacceptable; must be between 0 and {MAX_TIMEOUT}'
+        })
     
     # Determine the image format from the Accept header
     accept_header = request.headers.get('Accept', 'image/jpeg')
@@ -154,64 +162,67 @@ def scrape():
 
     content_file = None
     try:
-        status, headers, content_file, screenshot_files, metadata = scrape_task.apply_async(
-            args=[url, wait, image_format, n_screenshots, browser_dim], kwargs={}
-        ).get(timeout=60)  # 60 seconds
+        status, headers, content_file, screenshot_files, metadata, main_url = scrape_task.apply_async(
+            args=[url, wait, image_format, n_screenshots, browser_dim, actions], kwargs={}
+        ).get(timeout=worker_timeout)
         headers = {str(k).lower(): v for k, v in headers.items()}  # make headers all lowercase (they're case insensitive)
+    except ElementNotLocatedByText as e:
+        return jsonify({
+            'error': f"Failed to locate element with text '{e}'"
+        }), 500
     except Exception as e:
         # If scrape_in_child uses too much memory, it seems to end up here.
         # however, if exit(0) is called, I find it doesn't.
         print(f"Exception raised from scraping process: {e}", file=sys.stderr, flush=True)
 
     successful = True if content_file else False
+    if not successful:
+        return jsonify({
+            'error': "This is a generic error message; sorry about that."
+        }), 500
 
-    if successful:
-        boundary = 'Boundary712sAM12MVaJff23NXJ'  # typed out some random digits
-        # Generate a mixed multipart response
-        # See details on the standard here: https://www.w3.org/Protocols/rfc1341/7_2_Multipart.html
-        def stream():
-            # Start with headers and status as json
-            # JSON part with filename
-            filename = "info.json"
-            yield (
-                f"--{boundary}\r\n"
-                "Content-Type: application/json\r\n"
-                f"Content-Disposition: attachment; name=\"{filename}\"; filename=\"{filename}\"\r\n\r\n"
-            ).encode()
-            yield json.dumps({'status': status, 'headers': headers, 'metadata': metadata}).encode()
+    boundary = 'Boundary712sAM12MVaJff23NXJ'  # typed out some random digits
+    # Generate a mixed multipart response
+    # See details on the standard here: https://www.w3.org/Protocols/rfc1341/7_2_Multipart.html
+    def stream():
+        # Start with headers and status as json
+        # JSON part with filename
+        filename = "info.json"
+        yield (
+            f"--{boundary}\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Disposition: attachment; name=\"{filename}\"; filename=\"{filename}\"\r\n\r\n"
+        ).encode()
+        yield json.dumps({'status': status, 'headers': headers, 'metadata': metadata, 'url': main_url}).encode()
 
-            # Main content (HTML/other)
-            ext = get_ext_from_content_type(headers['content-type'])
-            filename = f"main{ext}"
+        # Main content (HTML/other)
+        ext = get_ext_from_content_type(headers['content-type'])
+        filename = f"main{ext}"
+        yield (
+            f"\r\n--{boundary}\r\n"
+            f"Content-Disposition: attachment; name=\"{filename}\"; filename=\"{filename}\"\r\n"
+            "Content-Transfer-Encoding: binary\r\n"
+            f"Content-Type: {headers['content-type']}\r\n\r\n"
+        ).encode()
+        with open(content_file, 'rb') as content:
+            while chunk := content.read(4096):
+                yield chunk
+
+        # Screenshots (correct MIME type)
+        for i, ss in enumerate(screenshot_files):
+            filename = f"ss{i}.{image_format}"
             yield (
                 f"\r\n--{boundary}\r\n"
                 f"Content-Disposition: attachment; name=\"{filename}\"; filename=\"{filename}\"\r\n"
                 "Content-Transfer-Encoding: binary\r\n"
-                f"Content-Type: {headers['content-type']}\r\n\r\n"
+                f"Content-Type: image/{image_format}\r\n\r\n"
             ).encode()
-            with open(content_file, 'rb') as content:
+            with open(ss, 'rb') as content:
                 while chunk := content.read(4096):
                     yield chunk
 
-            # Screenshots (correct MIME type)
-            for i, ss in enumerate(screenshot_files):
-                filename = f"ss{i}.{image_format}"
-                yield (
-                    f"\r\n--{boundary}\r\n"
-                    f"Content-Disposition: attachment; name=\"{filename}\"; filename=\"{filename}\"\r\n"
-                    "Content-Transfer-Encoding: binary\r\n"
-                    f"Content-Type: image/{image_format}\r\n\r\n"
-                ).encode()
-                with open(ss, 'rb') as content:
-                    while chunk := content.read(4096):
-                        yield chunk
+        # Final boundary
+        yield f"\r\n--{boundary}--\r\n".encode()
 
-            # Final boundary
-            yield f"\r\n--{boundary}--\r\n".encode()
-
-        return stream(), 200, {'Content-Type': f'multipart/mixed; boundary={boundary}'}
-
-    else:
-        return jsonify({
-            'error': "This is a generic error message; sorry about that."
-        }), 500
+    return stream(), 200, {'Content-Type': f'multipart/mixed; boundary={boundary}'}
+    

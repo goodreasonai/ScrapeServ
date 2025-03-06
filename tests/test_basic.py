@@ -11,7 +11,7 @@ def test_basic():
     resp.content_headers.get('Content-Type')
     mime_type_from_content_headers = resp.content_headers.get('Content-Type').split(';')[0].strip()
     assert(mime_type_from_content_headers == mime_type)
-    
+
     assert(len(resp.screenshot_contents) > 1)
     assert(len(resp.screenshot_headers) > 1)
     assert(len(resp.screenshot_contents) == len(resp.screenshot_headers))
@@ -20,3 +20,10 @@ def test_basic():
     n_screenshots = meta.get('truncated_screenshots_n')
     assert(len(resp.screenshot_contents) == n_screenshots)
 
+
+def test_pdf():
+    url = "https://goodreason.ai/transformers.pdf"
+    resp = scrape(url)
+    assert(resp.mime_type == 'application/pdf')
+    assert(len(resp.content) > 10)
+    assert(resp.status == 200)

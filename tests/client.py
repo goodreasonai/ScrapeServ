@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ScrapeResponse():
+    url: str | None = None
     status: int | None = None
     error: str | None = None
     headers: CaseInsensitiveDict | None = None
@@ -22,13 +23,14 @@ class ScrapeResponse():
 def _byte_dict_to_str(dict: dict):
     return {k.decode('utf-8'): v.decode('utf-8') for k, v in dict.items()}
 
-def scrape(url: str, dim: tuple[int, int] | None=None, img_type: str | None=None, wait: int | None=None, max_screenshots: int | None=None) -> ScrapeResponse:
+def scrape(url: str, dim: tuple[int, int] | None=None, img_type: str | None=None, wait: int | None=None, max_screenshots: int | None=None, actions: list[dict] | None=None) -> ScrapeResponse:
     data = {
         'url': url,
         **{k: v for k, v in {
             'browser_dim': dim,
             'wait': wait,
-            'max_screenshots': max_screenshots
+            'max_screenshots': max_screenshots,
+            'actions': actions
         }.items() if v is not None}
     }
     headers = {} if img_type is None else {
@@ -49,6 +51,7 @@ def scrape(url: str, dim: tuple[int, int] | None=None, img_type: str | None=None
             if i == 0:  # First is some JSON containing headers, status code, and other metadata
                 json_part = json.loads(part.content)
                 req_status = json_part['status']  # An integer
+                resp.url = json_part['url']
                 req_headers: dict = json_part['headers']  # Headers from the request made to your URL
                 metadata = json_part['metadata']  # For reference, information like the number of screenshots and their compressed / uncompressed sizes
                 mime_type = req_headers['content-type'].split(';')[0].strip()
