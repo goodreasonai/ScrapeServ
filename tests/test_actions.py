@@ -78,3 +78,26 @@ def test_bad_click():
     ])
     assert(resp.error)
     assert("Vanilla milkshake" in resp.error)
+
+
+"""
+curl -i -s -X POST "http://localhost:5006/scrape" \
+    -H "Content-Type: application/json" \
+    -d '{"url": "https://interpret.csis.org/translations/on-chinas-high-level-opening-up-to-the-outside-in-the-context-of-major-changes-unseen-in-a-century/", "actions": [{"action": "click_download", "args": {"text": "Original text"}}]}' \
+    | ripmime -i - -d outfolder --formdata --no-nameless
+"""
+def test_download():
+    url = "https://interpret.csis.org/translations/on-chinas-high-level-opening-up-to-the-outside-in-the-context-of-major-changes-unseen-in-a-century/"
+    resp = scrape(url, actions=[
+        {
+            'action': 'click_download',
+            'args': {
+                'text': "Original text"
+            }
+        }
+    ])
+    assert(resp.content)
+    assert(len(resp.content)) > 10
+    assert(resp.content_mime_type == 'application/pdf')
+    assert(len(resp.screenshot_contents) == 0)
+

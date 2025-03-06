@@ -95,6 +95,11 @@ def get_ext_from_content_type(content_type: str):
     return ""
 
 
+def get_mimetype_from_filename(filename: str):
+    type, encoding = mimetypes.guess_type(filename)
+    return type
+
+
 @app.route('/scrape', methods=('POST',))
 def scrape():
     if len(SCRAPER_API_KEYS):
@@ -162,7 +167,7 @@ def scrape():
 
     content_file = None
     try:
-        status, headers, content_file, screenshot_files, metadata, main_url = scrape_task.apply_async(
+        status, headers, content_file, screenshot_files, metadata, main_url, download_name = scrape_task.apply_async(
             args=[url, wait, image_format, n_screenshots, browser_dim, actions], kwargs={}
         ).get(timeout=worker_timeout)
         headers = {str(k).lower(): v for k, v in headers.items()}  # make headers all lowercase (they're case insensitive)
@@ -196,13 +201,21 @@ def scrape():
         yield json.dumps({'status': status, 'headers': headers, 'metadata': metadata, 'url': main_url}).encode()
 
         # Main content (HTML/other)
-        ext = get_ext_from_content_type(headers['content-type'])
-        filename = f"main{ext}"
+        if not download_name:
+            main_content_type = headers['content-type']
+            ext = get_ext_from_content_type(main_content_type)
+            filename = f"main{ext}"
+        else:
+            filename = download_name
+            main_content_type = get_mimetype_from_filename(filename)
+            if not main_content_type:
+                main_content_type = headers['content-type']
+        
         yield (
             f"\r\n--{boundary}\r\n"
             f"Content-Disposition: attachment; name=\"{filename}\"; filename=\"{filename}\"\r\n"
             "Content-Transfer-Encoding: binary\r\n"
-            f"Content-Type: {headers['content-type']}\r\n\r\n"
+            f"Content-Type: {main_content_type}\r\n\r\n"
         ).encode()
         with open(content_file, 'rb') as content:
             while chunk := content.read(4096):

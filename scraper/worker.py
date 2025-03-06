@@ -57,6 +57,7 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim, actions):
     status = None
     headers = None
     main_url = url
+    download_name = None
     try:
         with sync_playwright() as p:
             # Should be resilient to untrusted websites
@@ -133,7 +134,7 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim, actions):
             if status >= 400:
                 pass
             elif not processing_download:
-
+                download_action = False
                 while len(actions):
                     if len(actions) and actions[0]['action'] == 'click_link':
                         act = actions[0]
@@ -147,6 +148,19 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim, actions):
                         if response.url != page.url:
                             if page.url in responses:
                                 response = responses[page.url]
+                    # A successful download will automatically break (thus must be the last action)
+                    if len(actions) and actions[0]['action'] == 'click_download':
+                        act = actions[0]
+                        args = act['args']
+                        txt = args['text']
+                        page.wait_for_timeout(wait)
+                        with page.expect_download() as download_info:
+                            page.get_by_text(txt).first.click()
+                            download = download_info.value
+                            download.save_as(content_file_tmp.name)
+                            download_action = True
+                            download_name = download_info.value.suggested_filename
+                            break
                     actions = actions[1:]
 
                 status = response.status
@@ -155,7 +169,9 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim, actions):
                 main_url = response.url
 
                 # If this is an HTML page, take screenshots
-                if "text/html" in content_type:
+                if download_action:
+                    main_url = page.url
+                elif "text/html" in content_type:
                     page.wait_for_timeout(wait)
 
                     file_bytes = page.content().encode()
@@ -191,12 +207,11 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim, actions):
 
                         raw_screenshot_files.append(tmp.name)
                         tmp.close()
+                        content_file_tmp.write(file_bytes)
                 else:
                     file_bytes = response.body()
+                    content_file_tmp.write(file_bytes)
 
-                # Retrieve the raw bytes regardless of content type
-                # Note that if not text/html, might've been caught by the download stuff above
-                content_file_tmp.write(file_bytes)
                 browser.close()
 
     except Exception as e:
@@ -231,4 +246,4 @@ def scrape_task(url, wait, image_format, n_screenshots, browser_dim, actions):
         finally:
             os.remove(ss)
 
-    return status, headers, content_file, compressed_screenshot_files, metadata, main_url
+    return status, headers, content_file, compressed_screenshot_files, metadata, main_url, download_name

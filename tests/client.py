@@ -12,10 +12,11 @@ class ScrapeResponse():
     status: int | None = None
     error: str | None = None
     headers: CaseInsensitiveDict | None = None
+    mime_type: str | None = None
     metadata: CaseInsensitiveDict | None = None
     content: bytes | None = None
     content_headers: CaseInsensitiveDict | None = None
-    mime_type: str | None = None
+    content_mime_type: str | None = None
     screenshot_contents: list[bytes] = field(default_factory=lambda: [])
     screenshot_headers: list[CaseInsensitiveDict] = field(default_factory=lambda: [])
 
@@ -64,6 +65,7 @@ def scrape(url: str, dim: tuple[int, int] | None=None, img_type: str | None=None
                 headers = _byte_dict_to_str(part.headers)  # Will contain info about the content (text/html, application/pdf, etc.)
                 resp.content = content
                 resp.content_headers = CaseInsensitiveDict(headers)
+                resp.content_mime_type = resp.content_headers['content-type'].split(';')[0].strip()
             else:  # Other parts are screenshots, if they exist
                 img = part.content
                 headers = _byte_dict_to_str(part.headers)  # Will tell you the image format
