@@ -101,3 +101,25 @@ def test_download():
     assert(resp.content_mime_type == 'application/pdf')
     assert(len(resp.screenshot_contents) == 0)
 
+
+"""
+curl -i -s -X POST "http://localhost:5006/scrape" \
+    -H "Content-Type: application/json" \
+    -d '{"url": "https://goodreason.ai", "actions": [{"action": "click_download", "args": {"text": "Terms of Use"}}]}' \
+    | ripmime -i - -d outfolder --formdata --no-nameless
+"""
+def test_pdf_link():
+    url = "https://goodreason.ai"
+    resp = scrape(url, actions=[
+        {
+            'action': 'click_download',
+            'args': {
+                'text': "Terms of Use"
+            }
+        }
+    ])
+    assert(resp.content)
+    assert(len(resp.content)) > 10
+    assert(resp.content_mime_type == 'application/pdf')
+    assert(len(resp.screenshot_contents) == 0)
+
